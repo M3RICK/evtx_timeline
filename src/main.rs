@@ -1,5 +1,6 @@
 mod detect;
 mod event;
+mod timeline;
 
 use anyhow::{Context, Result};
 use detect::Alert;
@@ -17,6 +18,11 @@ fn main() -> Result<()> {
     let alerts = detect::scan(&events);
     eprintln!("found {} alerts", alerts.len());
     print_alerts(&alerts);
+
+    if let Some(csv_path) = std::env::args().nth(2) {
+        timeline::write_csv(&events, std::path::Path::new(&csv_path))?;
+        eprintln!("wrote timeline to {csv_path}");
+    }
 
     Ok(())
 }
