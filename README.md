@@ -19,11 +19,12 @@ cargo build --release
 ## Usage
 
 ```bash
-cargo run -- <path/to/file.evtx>
+cargo run -- <path/to/file.evtx> [timeline.csv]
 ```
 
 It prints one line per alert and a summary (events parsed / alerts found) on
-stderr.
+stderr. Pass an optional second argument to also write the full, chronologically
+sorted timeline to a CSV file.
 
 ## What it detects
 
@@ -52,7 +53,8 @@ cargo test
 - [x] Parse EVTX and normalize events
 - [x] EventID-based detection with severity levels
 - [x] Stateful brute-force detection (+ unit tests)
-- [ ] CSV / JSON timeline export
+- [x] CSV timeline export
+- [ ] JSON timeline export
 - [ ] Per-account and time-windowed brute-force detection
 - [ ] More detection rules
 
