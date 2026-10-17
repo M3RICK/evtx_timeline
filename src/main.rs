@@ -1,6 +1,8 @@
+mod detect;
 mod event;
 
 use anyhow::{Context, Result};
+use detect::Alert;
 use event::Event;
 use evtx::EvtxParser;
 
@@ -9,21 +11,37 @@ fn main() -> Result<()> {
         .nth(1)
         .context("usage: evtx_timeline <file.evtx>")?;
 
-    let mut parser = EvtxParser::from_path(&path)
-        .with_context(|| format!("cannot open {path}"))?;
+    let events = load_events(&path)?;
+    eprintln!("parsed {} events", events.len());
 
-    let mut count = 0u64;
+    let alerts = detect::scan(&events);
+    eprintln!("found {} alerts", alerts.len());
+    print_alerts(&alerts);
+
+    Ok(())
+}
+
+/// Read every parsable event from an .evtx file into memory.
+fn load_events(path: &str) -> Result<Vec<Event>> {
+    let mut parser = EvtxParser::from_path(path).with_context(|| format!("cannot open {path}"))?;
+    let mut events = Vec::new();
+
     for record in parser.records_json_value() {
         let record = record.context("failed to read a record")?;
         if let Some(event) = Event::from_record(&record) {
-            println!(
-                "{}  id={:<5}  {}  ({})",
-                event.timestamp, event.event_id, event.channel, event.provider
-            );
-            count += 1;
+            events.push(event);
         }
     }
 
-    eprintln!("parsed {count} events");
-    Ok(())
+    Ok(events)
+}
+
+/// Print one line per alert.
+fn print_alerts(alerts: &[Alert]) {
+    for a in alerts {
+        println!(
+            "[{:?}] {}  id={:<5}  {}",
+            a.severity, a.timestamp, a.event_id, a.message
+        );
+    }
 }
