@@ -20,18 +20,35 @@ cargo build --release
 ## Usage
 
 ```bash
-cargo run -- <path/to/file.evtx> [timeline.csv]
+evtx_timeline <PATHS>... [OPTIONS]
+
+# one log
+cargo run --release -- Security.evtx
+
+# a whole collected log folder, critical alerts only, plus a timeline
+cargo run --release -- ./winevt/Logs --min-severity critical --csv timeline.csv
 ```
 
-It prints one line per alert, in chronological order, with who and where when
-the event says so (`target=`, `by=`, `ip=`...), and a summary (events parsed /
-alerts found) on stderr. Unreadable records are skipped and counted, not fatal. Pass an optional second argument to also write the full, chronologically
-sorted timeline to a CSV file.
+Each path is an `.evtx` file or a folder, searched recursively. Everything is
+merged into one chronological timeline.
+
+| Option | Effect |
+|--------|--------|
+| `--min-severity <info\|warning\|critical>` | Hide alerts below this level |
+| `--json` | Print alerts as JSON, one object per line |
+| `--csv <FILE>` | Write every event to a CSV timeline |
+| `--jsonl <FILE>` | Write every event, with its full payload, as JSON Lines |
+| `--rules <FILE>` | Use your own rules file instead of the built-in one |
+
+Alerts go to stdout, one per line, in chronological order, with the machine
+and who / from where when the event says so (`target=`, `by=`, `ip=`...). The
+summary and warnings go to stderr. Files that will not open and records that
+will not parse are skipped and reported, not fatal.
 
 ## What it detects
 
 Per-event rules live in [`rules.toml`](rules.toml), which is compiled into the
-binary. A rule is an EventID, the channel it belongs to, a severity, and
+binary (`--rules` swaps in your own file). A rule is an EventID, the channel it belongs to, a severity, and
 optional conditions on the event's fields:
 
 ```toml
@@ -65,9 +82,12 @@ cargo test
 - [x] EventID-based detection with severity levels
 - [x] Stateful brute-force detection (+ unit tests)
 - [x] CSV timeline export
-- [ ] JSON timeline export
+- [x] JSON timeline export
 - [x] Per-account and time-windowed brute-force detection
-- [ ] More detection rules
+- [x] Rules in a TOML file, with channel and field conditions
+- [x] Folder input, severity filter, JSON alerts
+- [ ] Sigma rule support
+- [ ] Password-spraying detection (many accounts from one source)
 
 ---
 

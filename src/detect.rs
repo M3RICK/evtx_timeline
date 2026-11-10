@@ -4,7 +4,7 @@ use evtx::Timestamp;
 use serde::Deserialize;
 use std::collections::HashMap;
 
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "lowercase")]
 pub enum Severity {
     Info,
@@ -18,6 +18,8 @@ pub struct Alert {
     pub severity: Severity,
     pub timestamp: Timestamp,
     pub event_id: u64,
+    /// Machine that logged the event (several can be merged in one run).
+    pub computer: String,
     pub message: String,
     /// Who / from where, e.g. "target=bob by=admin ip=10.0.0.5".
     pub details: String,
@@ -29,6 +31,7 @@ impl Alert {
             severity,
             timestamp: e.timestamp,
             event_id: e.event_id,
+            computer: e.computer.clone(),
             message: message.to_string(),
             details: details(e),
         }
