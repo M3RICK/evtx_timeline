@@ -45,6 +45,25 @@ and who / from where when the event says so (`target=`, `by=`, `ip=`...). The
 summary and warnings go to stderr. Files that will not open and records that
 will not parse are skipped and reported, not fatal.
 
+### Example
+
+On the real attack logs used by the tests (see [Tests](#tests)), 8 of the 14
+alerts:
+
+```console
+$ evtx_timeline samples/attack --min-severity critical
+parsed 158 events from 12 files
+found 14 alerts
+[Critical] 2019-03-03T09:20:28.621489Z  WIN-77LTAPHIQ1R.example.corp  id=7045   Service runs a command interpreter or admin share (PsExec-style)  service=spoolfool path=cmd.exe
+[Critical] 2019-03-17T19:37:11.66193Z  PC04.example.corp  id=10     LSASS process memory was accessed (possible credential dumping)  source=C:\Users\IEUser\Desktop\mimikatz_trunk\Win32\mimikatz.exe target_image=C:\Windows\system32\lsass.exe
+[Critical] 2019-03-19T23:34:25.894341Z  PC01.example.corp  id=104    An event log was cleared  by=user01
+[Critical] 2019-03-19T23:35:07.524202Z  PC01.example.corp  id=1102   Security audit log was cleared  by=user01
+[Critical] 2019-05-12T12:52:43.702578Z  IEWIN7  id=7045   Service runs a command interpreter or admin share (PsExec-style)  service=WinPwnage path=%COMSPEC% /c ping -n 1 127.0.0.1 >nul && echo 'WinPwnage' > \\.\pipe\WinPwnagePipe
+[Critical] 2019-07-18T20:40:00.730676Z  MSEDGEWIN10  id=1116   Defender detected malware  threat=Trojan:PowerShell/Powersploit.M
+[Critical] 2019-07-18T20:41:17.508276Z  MSEDGEWIN10  id=1116   Defender detected malware  threat=Backdoor:ASP/Ace.T
+[Critical] 2019-09-22T11:23:19.251925Z  MSEDGEWIN10  id=4732   Member added to a privileged group  target=Administrators member=S-1-5-20 by=IEUser
+```
+
 ## What it detects
 
 Per-event rules live in [`rules.toml`](rules.toml), which is compiled into the
