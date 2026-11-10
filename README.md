@@ -22,8 +22,9 @@ cargo build --release
 cargo run -- <path/to/file.evtx> [timeline.csv]
 ```
 
-It prints one line per alert and a summary (events parsed / alerts found) on
-stderr. Pass an optional second argument to also write the full, chronologically
+It prints one line per alert, in chronological order, with who and where when
+the event says so (`target=`, `by=`, `ip=`...), and a summary (events parsed /
+alerts found) on stderr. Unreadable records are skipped and counted, not fatal. Pass an optional second argument to also write the full, chronologically
 sorted timeline to a CSV file.
 
 ## What it detects
@@ -32,15 +33,16 @@ sorted timeline to a CSV file.
 |---------|---------|----------|
 | 1102 | Security audit log was cleared | Critical |
 | 4719 | System audit policy was changed | Critical |
-| 4728 | Member added to a security-enabled global group | Critical |
-| 4732 | Member added to a security-enabled local group | Critical |
+| 4728 / 4732 | Member added to a privileged group (Administrators, Domain/Schema/Enterprise Admins) | Critical |
+| 4728 / 4732 | Member added to any other security group | Warning |
 | 7045 | A service was installed | Warning |
 | 4720 | User account was created | Warning |
 | 4722 | User account was enabled | Info |
 | 4625 | Failed logon attempt | Info |
 
-Plus a behavioral rule: *N failed logons (4625) followed by a success (4624)*
-→ possible brute force.
+Plus a behavioral rule: *5 or more failed logons (4625) on an account within
+10 minutes, followed by a success (4624) on that same account* → possible brute
+force.
 
 ## Tests
 
@@ -55,7 +57,7 @@ cargo test
 - [x] Stateful brute-force detection (+ unit tests)
 - [x] CSV timeline export
 - [ ] JSON timeline export
-- [ ] Per-account and time-windowed brute-force detection
+- [x] Per-account and time-windowed brute-force detection
 - [ ] More detection rules
 
 ---
