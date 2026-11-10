@@ -5,8 +5,9 @@ suspicious activity, written in Rust.
 
 It reads a log, normalizes each record, and runs two kinds of detection rules:
 
-- **Per-event rules** -> flag a single EventID known to matter (log cleared,
-  account created, service installed, privilege-group change...).
+- **Per-event rules** -> flag a single event known to matter (log cleared,
+  account created, service installed, privilege-group change...), defined in
+  a TOML file.
 - **Stateful rules** -> look at sequences, e.g. a burst of failed logons
   followed by a success (a likely successful brute force).
 
@@ -29,20 +30,28 @@ sorted timeline to a CSV file.
 
 ## What it detects
 
-| EventID | Meaning | Severity |
-|---------|---------|----------|
-| 1102 | Security audit log was cleared | Critical |
-| 4719 | System audit policy was changed | Critical |
-| 4728 / 4732 | Member added to a privileged group (Administrators, Domain/Schema/Enterprise Admins) | Critical |
-| 4728 / 4732 | Member added to any other security group | Warning |
-| 7045 | A service was installed | Warning |
-| 4720 | User account was created | Warning |
-| 4722 | User account was enabled | Info |
-| 4625 | Failed logon attempt | Info |
+Per-event rules live in [`rules.toml`](rules.toml), which is compiled into the
+binary. A rule is an EventID, the channel it belongs to, a severity, and
+optional conditions on the event's fields:
 
-Plus a behavioral rule: *5 or more failed logons (4625) on an account within
-10 minutes, followed by a success (4624) on that same account* → possible brute
-force.
+```toml
+[[rule]]
+id = [4728, 4732, 4756]
+channel = "Security"
+severity = "critical"
+message = "Member added to a privileged group"
+where = { TargetSid = ["*-544", "*-512", "*-518", "*-519"] }
+```
+
+The first matching rule wins. The shipped set covers log clearing, audit policy
+changes, account and group changes, RDP logons, Kerberoasting, scheduled tasks,
+service installs (PsExec-style ones are critical), suspicious PowerShell, a few
+Sysmon events (encoded command lines, remote thread injection, LSASS access)
+and Windows Defender alerts.
+
+Plus a behavioral rule, in code: *5 or more failed logons (4625) on an account
+within 10 minutes, followed by a success (4624) on that same account* →
+possible brute force.
 
 ## Tests
 

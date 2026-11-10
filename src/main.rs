@@ -15,7 +15,8 @@ fn main() -> Result<()> {
     let events = load_events(&path)?;
     eprintln!("parsed {} events", events.len());
 
-    let alerts = detect::scan(&events);
+    let rules = detect::parse_rules(detect::DEFAULT_RULES)?;
+    let alerts = detect::scan(&events, &rules);
     eprintln!("found {} alerts", alerts.len());
     print_alerts(&alerts);
 

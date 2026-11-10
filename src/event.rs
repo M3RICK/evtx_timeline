@@ -17,7 +17,17 @@ impl Event {
     /// Parse one record; None if it is malformed, so a bad record is skipped.
     pub fn from_record(mut record: SerializedEvtxRecord<Value>) -> Option<Event> {
         let event = record.data.get_mut("Event")?;
-        let data = take_payload(event);
+        let mut data = take_payload(event);
+        // Numbers (LogonType, ports...) become strings so `field` reads them.
+        for value in data
+            .as_object_mut()
+            .into_iter()
+            .flat_map(|o| o.values_mut())
+        {
+            if value.is_number() {
+                *value = Value::String(value.to_string());
+            }
+        }
         let system = event.get("System")?;
         let text = |v: Option<&Value>| v.and_then(Value::as_str).unwrap_or("").to_string();
 

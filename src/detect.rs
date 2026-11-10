@@ -1,8 +1,11 @@
 use crate::event::Event;
+use anyhow::{Context, Result};
 use evtx::Timestamp;
+use serde::Deserialize;
 use std::collections::HashMap;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Severity {
     Info,
     Warning,
@@ -15,31 +18,103 @@ pub struct Alert {
     pub severity: Severity,
     pub timestamp: Timestamp,
     pub event_id: u64,
-    pub message: &'static str,
+    pub message: String,
     /// Who / from where, e.g. "target=bob by=admin ip=10.0.0.5".
     pub details: String,
 }
 
 impl Alert {
-    fn new(e: &Event, severity: Severity, message: &'static str) -> Alert {
+    fn new(e: &Event, severity: Severity, message: &str) -> Alert {
         Alert {
             severity,
             timestamp: e.timestamp,
             event_id: e.event_id,
-            message,
+            message: message.to_string(),
             details: details(e),
         }
     }
 }
 
-/// Run every detection rule over the events (expected in chronological
-/// order): the per-event rules, then the stateful ones that look at sequences.
-pub fn scan(events: &[Event]) -> Vec<Alert> {
+/// The rules shipped inside the binary, used unless the user brings a file.
+pub const DEFAULT_RULES: &str = include_str!("../rules.toml");
+
+/// A TOML value that may be written alone or as a list: `4624` or `[4728, 4732]`.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum OneOrMany<T> {
+    One(T),
+    Many(Vec<T>),
+}
+
+impl<T> OneOrMany<T> {
+    fn as_slice(&self) -> &[T] {
+        match self {
+            OneOrMany::One(x) => std::slice::from_ref(x),
+            OneOrMany::Many(xs) => xs,
+        }
+    }
+}
+
+/// One per-event detection rule, as written in the rules file (see rules.toml
+/// for the format).
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Rule {
+    id: OneOrMany<u64>,
+    channel: Option<String>,
+    severity: Severity,
+    message: String,
+    /// Payload field -> accepted pattern(s). All fields must match.
+    #[serde(default, rename = "where")]
+    conditions: HashMap<String, OneOrMany<String>>,
+}
+
+impl Rule {
+    fn matches(&self, e: &Event) -> bool {
+        self.id.as_slice().contains(&e.event_id)
+            && self
+                .channel
+                .as_ref()
+                .is_none_or(|c| c.eq_ignore_ascii_case(&e.channel))
+            && self.conditions.iter().all(|(field, patterns)| {
+                let value = e.field(field);
+                patterns.as_slice().iter().any(|p| wildcard_match(p, value))
+            })
+    }
+}
+
+/// Case-insensitive match where the pattern may start and/or end with `*`.
+fn wildcard_match(pattern: &str, value: &str) -> bool {
+    let (p, v) = (pattern.to_lowercase(), value.to_lowercase());
+    match (p.strip_prefix('*'), p.strip_suffix('*')) {
+        (Some(_), Some(_)) if p.len() >= 2 => v.contains(&p[1..p.len() - 1]),
+        (Some(suffix), _) => v.ends_with(suffix),
+        (_, Some(prefix)) => v.starts_with(prefix),
+        _ => v == p,
+    }
+}
+
+/// Parse a rules file. Typos (unknown key, bad severity) are errors, so a
+/// broken rule never silently stops detecting.
+pub fn parse_rules(text: &str) -> Result<Vec<Rule>> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct RuleFile {
+        rule: Vec<Rule>,
+    }
+    let file: RuleFile = toml::from_str(text).context("invalid rules file")?;
+    Ok(file.rule)
+}
+
+/// Run every detection over the events (expected in chronological order):
+/// the per-event rules (first matching rule wins), then the stateful
+/// detections that look at sequences.
+pub fn scan(events: &[Event], rules: &[Rule]) -> Vec<Alert> {
     let mut alerts: Vec<Alert> = events
         .iter()
         .filter_map(|e| {
-            let (severity, message) = rule_for(e)?;
-            Some(Alert::new(e, severity, message))
+            let rule = rules.iter().find(|r| r.matches(e))?;
+            Some(Alert::new(e, rule.severity, &rule.message))
         })
         .collect();
 
@@ -49,22 +124,34 @@ pub fn scan(events: &[Event]) -> Vec<Alert> {
 }
 
 /// Payload fields worth showing next to an alert, with their short label.
-const CONTEXT_FIELDS: [(&str, &str); 7] = [
+const CONTEXT_FIELDS: [(&str, &str); 13] = [
     ("TargetUserName", "target"),
     ("MemberSid", "member"),
     ("SubjectUserName", "by"),
     ("IpAddress", "ip"),
     ("WorkstationName", "host"),
+    ("LogonType", "logon_type"),
     ("ServiceName", "service"),
     ("ImagePath", "path"),
+    ("TaskName", "task"),
+    ("Image", "image"),
+    ("SourceImage", "source"),
+    ("TargetImage", "target_image"),
+    ("CommandLine", "cmd"),
 ];
+
+/// Longest field value shown in an alert line (command lines can be huge).
+const MAX_DETAIL_CHARS: usize = 200;
 
 /// Build the "label=value ..." context string from whichever fields exist.
 fn details(e: &Event) -> String {
     CONTEXT_FIELDS
         .iter()
         .filter(|(key, _)| !e.field(key).is_empty())
-        .map(|(key, label)| format!("{label}={}", e.field(key)))
+        .map(|(key, label)| {
+            let value: String = e.field(key).chars().take(MAX_DETAIL_CHARS).collect();
+            format!("{label}={value}")
+        })
         .collect::<Vec<_>>()
         .join(" ")
 }
@@ -109,33 +196,6 @@ pub fn detect_bruteforce(events: &[Event]) -> Vec<Alert> {
     }
 
     alerts
-}
-
-/// Well-known RIDs of groups that grant admin rights: Administrators,
-/// Domain Admins, Schema Admins, Enterprise Admins.
-const PRIVILEGED_RIDS: [&str; 4] = ["544", "512", "518", "519"];
-
-/// Map a suspicious Windows event to (severity, description).
-/// None means we do not flag this event.
-fn rule_for(e: &Event) -> Option<(Severity, &'static str)> {
-    match e.event_id {
-        1102 => Some((Severity::Critical, "Security audit log was cleared")),
-        4625 => Some((Severity::Info, "Failed logon attempt")),
-        4719 => Some((Severity::Critical, "System audit policy was changed")),
-        4720 => Some((Severity::Warning, "User account was created")),
-        4722 => Some((Severity::Info, "User account was enabled")),
-        // The group is the "target" here; its SID ends with the group's RID.
-        4728 | 4732 => {
-            let rid = e.field("TargetSid").rsplit('-').next().unwrap_or("");
-            Some(if PRIVILEGED_RIDS.contains(&rid) {
-                (Severity::Critical, "Member added to a privileged group")
-            } else {
-                (Severity::Warning, "Member added to a security group")
-            })
-        }
-        7045 => Some((Severity::Warning, "A service was installed on the system")),
-        _ => None,
-    }
 }
 
 #[cfg(test)]
@@ -197,11 +257,59 @@ mod tests {
         assert_eq!(detect_bruteforce(&events).len(), 0);
     }
 
+    /// Scan one event with the shipped rules; return its alert, if any.
+    fn scan_one(mut e: Event, channel: &str) -> Option<Alert> {
+        e.channel = channel.to_string();
+        let rules = parse_rules(DEFAULT_RULES).expect("shipped rules must parse");
+        scan(&[e], &rules).pop()
+    }
+
     #[test]
     fn only_privileged_groups_are_critical() {
         let admins = ev(4732, 0, json!({ "TargetSid": "S-1-5-32-544" }));
         let users = ev(4732, 0, json!({ "TargetSid": "S-1-5-32-545" }));
-        assert_eq!(rule_for(&admins).unwrap().0, Severity::Critical);
-        assert_eq!(rule_for(&users).unwrap().0, Severity::Warning);
+        let severity = |e| scan_one(e, "Security").unwrap().severity;
+        assert_eq!(severity(admins), Severity::Critical);
+        assert_eq!(severity(users), Severity::Warning);
+    }
+
+    #[test]
+    fn same_id_in_another_channel_is_not_flagged() {
+        assert!(scan_one(ev(1102, 0, json!({})), "security").is_some());
+        assert!(scan_one(ev(1102, 0, json!({})), "Application").is_none());
+    }
+
+    #[test]
+    fn where_conditions_must_hold() {
+        let rdp = ev(4624, 0, json!({ "LogonType": "10" }));
+        let console = ev(4624, 0, json!({ "LogonType": "2" }));
+        assert_eq!(
+            scan_one(rdp, "Security").unwrap().message,
+            "Remote Desktop logon"
+        );
+        assert!(scan_one(console, "Security").is_none());
+    }
+
+    #[test]
+    fn wildcards() {
+        assert!(wildcard_match("*-544", "S-1-5-32-544"));
+        assert!(!wildcard_match("*-544", "S-1-5-32-545"));
+        assert!(wildcard_match("cmd*", "CMD.EXE /c whoami"));
+        assert!(wildcard_match(
+            "*downloadstring*",
+            "IEX (x).DownloadString('u')"
+        ));
+        assert!(wildcard_match("0x17", "0X17"));
+        assert!(!wildcard_match("0x17", "0x170"));
+    }
+
+    #[test]
+    fn rule_typos_are_rejected() {
+        let rule = |extra: &str| {
+            format!("[[rule]]\nid = 1\nseverity = \"info\"\nmessage = \"m\"\n{extra}")
+        };
+        assert!(parse_rules(&rule("")).is_ok());
+        assert!(parse_rules(&rule("chanel = \"Security\"")).is_err());
+        assert!(parse_rules(&rule("").replace("info", "severe")).is_err());
     }
 }
