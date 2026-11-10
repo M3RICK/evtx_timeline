@@ -2,7 +2,7 @@ use crate::event::Event;
 use anyhow::{Context, Result};
 use evtx::Timestamp;
 use serde::Deserialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "lowercase")]
@@ -122,6 +122,8 @@ pub fn scan(events: &[Event], rules: &[Rule]) -> Vec<Alert> {
         .collect();
 
     alerts.extend(detect_bruteforce(events));
+    alerts.extend(detect_failure_bursts(events));
+    alerts.extend(detect_spraying(events));
     alerts.sort_by_key(|a| a.timestamp);
     alerts
 }
@@ -209,6 +211,89 @@ pub fn detect_bruteforce(events: &[Event]) -> Vec<Alert> {
     alerts
 }
 
+/// How many failed logons on one account, success or not, are worth a warning.
+const FAILURE_BURST_THRESHOLD: usize = 10;
+/// How many distinct accounts failing from one source look like spraying.
+const SPRAY_THRESHOLD: usize = 10;
+
+/// Flag an account that keeps failing to log on, whether or not the attacker
+/// ever gets in (`detect_bruteforce` only speaks up on a success).
+pub fn detect_failure_bursts(events: &[Event]) -> Vec<Alert> {
+    failed_logon_bursts(
+        events,
+        "TargetUserName",
+        None,
+        FAILURE_BURST_THRESHOLD,
+        "Repeated failed logons on one account",
+        "failures",
+    )
+}
+
+/// Flag one source address failing on many different accounts: password
+/// spraying (one password tried everywhere, staying under lockout limits).
+pub fn detect_spraying(events: &[Event]) -> Vec<Alert> {
+    failed_logon_bursts(
+        events,
+        "IpAddress",
+        Some("TargetUserName"),
+        SPRAY_THRESHOLD,
+        "Failed logons on many accounts from one source (possible password spraying)",
+        "accounts",
+    )
+}
+
+/// Group failed logons (4625) by `key_field` and alert once when `threshold`
+/// of them (or of distinct `distinct_field` values, if given) fall within
+/// BRUTEFORCE_WINDOW_SECS. A group alerts again only after staying quiet for
+/// a whole window, so a day-long attack is one alert, not thousands.
+/// Events with an empty key (e.g. local logons have no IpAddress) are skipped.
+fn failed_logon_bursts(
+    events: &[Event],
+    key_field: &str,
+    distinct_field: Option<&str>,
+    threshold: usize,
+    message: &str,
+    count_label: &str,
+) -> Vec<Alert> {
+    let mut alerts = Vec::new();
+    // Key -> (failures still inside the window, burst already reported).
+    let mut groups: HashMap<String, (VecDeque<(Timestamp, String)>, bool)> = HashMap::new();
+
+    for e in events.iter().filter(|e| e.event_id == 4625) {
+        let key = e.field(key_field).to_lowercase();
+        if key.is_empty() {
+            continue;
+        }
+        let (window, alerted) = groups.entry(key).or_default();
+        while window
+            .front()
+            .is_some_and(|(t, _)| e.timestamp.duration_since(*t).as_secs() > BRUTEFORCE_WINDOW_SECS)
+        {
+            window.pop_front();
+        }
+        if window.is_empty() {
+            *alerted = false;
+        }
+        let value = distinct_field.map(|f| e.field(f).to_lowercase());
+        window.push_back((e.timestamp, value.unwrap_or_default()));
+
+        // ponytail: recounts the window on every failure, O(window); keep a
+        // running count per value if huge logs make this slow.
+        let count = match distinct_field {
+            Some(_) => window.iter().map(|(_, v)| v).collect::<HashSet<_>>().len(),
+            None => window.len(),
+        };
+        if count >= threshold && !*alerted {
+            *alerted = true;
+            let mut alert = Alert::new(e, Severity::Warning, message);
+            alert.details += &format!(" {count_label}={count}");
+            alerts.push(alert);
+        }
+    }
+
+    alerts
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -266,6 +351,51 @@ mod tests {
         let mut events = failures(5, 0, "bob");
         events.push(logon(4624, BRUTEFORCE_WINDOW_SECS + 60, "bob"));
         assert_eq!(detect_bruteforce(&events).len(), 0);
+    }
+
+    /// A failed logon for `user` coming from `ip`.
+    fn failure_from(secs: i64, user: &str, ip: &str) -> Event {
+        ev(
+            4625,
+            secs,
+            json!({ "TargetUserName": user, "IpAddress": ip }),
+        )
+    }
+
+    #[test]
+    fn failure_burst_alerts_once_then_again_after_a_quiet_window() {
+        let mut events = failures(25, 0, "bob"); // one burst, no success
+        events.extend(failures(9, 100, "alice")); // under the threshold
+        let quiet = 25 + BRUTEFORCE_WINDOW_SECS + 1;
+        events.extend(failures(10, quiet, "bob"));
+        let alerts = detect_failure_bursts(&events);
+        assert_eq!(alerts.len(), 2);
+        assert_eq!(alerts[0].details, "target=bob failures=10");
+    }
+
+    #[test]
+    fn spraying_counts_distinct_accounts_per_source() {
+        let spray = |ip: &str, users: usize, start: i64| -> Vec<Event> {
+            (0..users)
+                .map(|i| failure_from(start + i as i64, &format!("user{i}"), ip))
+                .collect()
+        };
+        let mut events = spray("10.0.0.5", 10, 0);
+        events.extend(spray("10.0.0.6", 9, 0)); // not enough accounts
+        // Many failures on one account is brute force, not spraying.
+        events.extend((0..30).map(|i| failure_from(i, "bob", "10.0.0.7")));
+        events.extend(failures(30, 0, "user")); // no source address
+        let alerts = detect_spraying(&events);
+        assert_eq!(alerts.len(), 1);
+        assert_eq!(alerts[0].details, "target=user9 ip=10.0.0.5 accounts=10");
+    }
+
+    #[test]
+    fn slow_spraying_outside_the_window_is_not_flagged() {
+        let events: Vec<Event> = (0..20)
+            .map(|i| failure_from(i * 120, &format!("user{i}"), "10.0.0.5"))
+            .collect();
+        assert_eq!(detect_spraying(&events).len(), 0);
     }
 
     /// Scan one event with the shipped rules; return its alert, if any.

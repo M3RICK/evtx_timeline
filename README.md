@@ -66,9 +66,17 @@ service installs (PsExec-style ones are critical), suspicious PowerShell, a few
 Sysmon events (encoded command lines, remote thread injection, LSASS access)
 and Windows Defender alerts.
 
-Plus a behavioral rule, in code: *5 or more failed logons (4625) on an account
-within 10 minutes, followed by a success (4624) on that same account* →
-possible brute force.
+Plus three behavioral rules on failed logons (4625), in code, all over a
+10-minute window:
+
+- *5 or more failures on an account, followed by a success (4624) on that same
+  account* → possible brute force (critical).
+- *10 or more failures on an account*, success or not → repeated failed logons
+  (warning).
+- *10 or more different accounts failing from one source address* → possible
+  password spraying (warning).
+
+The last two alert once per burst, and again only after a quiet window.
 
 ## Tests
 
@@ -95,7 +103,7 @@ check each one raises its alert. CI runs both on every push.
 - [x] Rules in a TOML file, with channel and field conditions
 - [x] Folder input, severity filter, JSON alerts
 - [ ] Sigma rule support
-- [ ] Password-spraying detection (many accounts from one source)
+- [x] Password-spraying detection (many accounts from one source)
 
 ---
 
