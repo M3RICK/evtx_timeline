@@ -73,8 +73,16 @@ possible brute force.
 ## Tests
 
 ```bash
-cargo test
+cargo test                          # unit tests
+
+./scripts/fetch-samples.sh          # download real attack logs (once)
+cargo test -- --include-ignored     # + end-to-end tests against them
 ```
+
+The end-to-end tests run the binary on logs recorded during real attack
+techniques (mimikatz, PsExec-style services, log clearing...) from
+[EVTX-ATTACK-SAMPLES](https://github.com/sbousseaden/EVTX-ATTACK-SAMPLES) and
+check each one raises its alert. CI runs both on every push.
 
 ## Roadmap
 
