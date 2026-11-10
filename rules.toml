@@ -136,7 +136,7 @@ id = 4104
 channel = "Microsoft-Windows-PowerShell/Operational"
 severity = "warning"
 message = "Suspicious PowerShell script block"
-where = { ScriptBlockText = ["*FromBase64String*", "*DownloadString*", "*DownloadFile*", "*Invoke-Expression*", "*Invoke-Mimikatz*", "*-EncodedCommand*"] }
+where = { ScriptBlockText = ["*FromBase64String*", "*DownloadString*", "*DownloadFile*", "*Invoke-Expression*", "*Invoke-Mimikatz*", "*MiniDumpWriteDump*", "*-EncodedCommand*"] }
 
 # --- Sysmon --------------------------------------------------------------
 

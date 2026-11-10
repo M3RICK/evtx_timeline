@@ -127,7 +127,7 @@ pub fn scan(events: &[Event], rules: &[Rule]) -> Vec<Alert> {
 }
 
 /// Payload fields worth showing next to an alert, with their short label.
-const CONTEXT_FIELDS: [(&str, &str); 13] = [
+const CONTEXT_FIELDS: [(&str, &str); 15] = [
     ("TargetUserName", "target"),
     ("MemberSid", "member"),
     ("SubjectUserName", "by"),
@@ -141,6 +141,8 @@ const CONTEXT_FIELDS: [(&str, &str); 13] = [
     ("SourceImage", "source"),
     ("TargetImage", "target_image"),
     ("CommandLine", "cmd"),
+    ("Threat Name", "threat"),
+    ("ScriptBlockText", "script"),
 ];
 
 /// Longest field value shown in an alert line (command lines can be huge).
@@ -152,7 +154,13 @@ fn details(e: &Event) -> String {
         .iter()
         .filter(|(key, _)| !e.field(key).is_empty())
         .map(|(key, label)| {
-            let value: String = e.field(key).chars().take(MAX_DETAIL_CHARS).collect();
+            // Scripts span lines; an alert must stay on one.
+            let value: String = e
+                .field(key)
+                .chars()
+                .take(MAX_DETAIL_CHARS)
+                .map(|c| if c.is_control() { ' ' } else { c })
+                .collect();
             format!("{label}={value}")
         })
         .collect::<Vec<_>>()
@@ -291,6 +299,12 @@ mod tests {
             "Remote Desktop logon"
         );
         assert!(scan_one(console, "Security").is_none());
+    }
+
+    #[test]
+    fn details_stay_on_one_line() {
+        let e = ev(4104, 0, json!({ "ScriptBlockText": "a\r\n\tb" }));
+        assert_eq!(details(&e), "script=a   b");
     }
 
     #[test]

@@ -32,7 +32,15 @@ impl Event {
         let text = |v: Option<&Value>| v.and_then(Value::as_str).unwrap_or("").to_string();
 
         Some(Event {
-            timestamp: record.timestamp,
+            // The event's own TimeCreated is the reference; the record header
+            // copy can be zeroed (it then reads as year 1601).
+            timestamp: system
+                .get("TimeCreated")
+                .and_then(|t| t.get("#attributes"))
+                .and_then(|a| a.get("SystemTime"))
+                .and_then(Value::as_str)
+                .and_then(|t| t.parse().ok())
+                .unwrap_or(record.timestamp),
             event_id: extract_event_id(system)?,
             channel: text(system.get("Channel")),
             provider: text(
