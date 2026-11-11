@@ -97,6 +97,22 @@ Plus three behavioral rules on failed logons (4625), in code, all over a
 
 The last two alert once per burst, and again only after a quiet window.
 
+## Why not Hayabusa or Chainsaw?
+
+[Hayabusa](https://github.com/Yamato-Security/hayabusa) and
+[Chainsaw](https://github.com/WithSecureLabs/chainsaw) are the mature,
+battle-tested EVTX detection tools, and in a real investigation they are what I
+reach for: large Sigma rule sets, fast, well maintained. evtx_timeline does not
+try to replace them.
+
+I built it to understand EVTX detection from the parser up, and to practice Rust
+on something useful: a small, readable codebase where every rule and every
+stateful detection is something I wrote and can explain line by line. The
+behavioral rules (brute force, spraying, done in code over a time window) and the
+dependency-light, single-binary design are where it does a little more than a
+plain Sigma matcher. Sigma rule support is on the roadmap precisely so it can
+meet those tools on their own ground.
+
 ## Tests
 
 ```bash
