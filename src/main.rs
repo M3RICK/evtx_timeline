@@ -8,6 +8,7 @@ use detect::{Alert, Severity};
 use event::Event;
 use evtx::EvtxParser;
 use serde_json::json;
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
 /// Parse Windows Event Logs, flag suspicious activity, export a timeline.
@@ -143,6 +144,8 @@ fn load_events(files: &[PathBuf]) -> Result<Vec<Event>> {
 
 /// Print one line per alert: human-readable text, or JSON for other tools.
 fn print_alerts(alerts: &[Alert], as_json: bool) {
+    // Colour only when writing to a real terminal; a redirected file/pipe stays clean.
+    let tty = std::io::stdout().is_terminal();
     for a in alerts {
         if as_json {
             println!(
@@ -157,12 +160,48 @@ fn print_alerts(alerts: &[Alert], as_json: bool) {
                 })
             );
         } else {
+            let tag = format!("[{:?}]", a.severity);
+            let (col, dim, rst) = if tty {
+                (sev_ansi(a.severity), "\x1b[2m", "\x1b[0m")
+            } else {
+                ("", "", "")
+            };
             println!(
-                "[{:?}] {}  {}  id={:<5}  {}  {}",
-                a.severity, a.timestamp, a.computer, a.event_id, a.message, a.details
+                "{col}{tag:<10}{rst}  {dim}{}{rst}  {}  {dim}id={:<5}{rst}  {}  {}",
+                a.timestamp.strftime("%F %T"),
+                a.computer,
+                a.event_id,
+                a.message,
+                shorten_sids(&a.details)
             );
         }
     }
+}
+
+/// ANSI colour for a severity, brightest for the most serious.
+fn sev_ansi(sev: Severity) -> &'static str {
+    match sev {
+        Severity::Critical => "\x1b[1;31m", // bold red
+        Severity::Warning => "\x1b[33m",    // yellow
+        Severity::Info => "\x1b[36m",       // cyan
+    }
+}
+
+/// Human view only: collapse a long domain SID (`S-1-5-21-a-b-c-RID`) to
+/// `S-1-5-21-…-RID`, keeping the account RID. The full SID stays in the JSON
+/// output for pivoting. Multiple spaces are preserved (split/join on ' ').
+fn shorten_sids(details: &str) -> String {
+    details
+        .split(' ')
+        .map(|tok| match tok.split_once('=') {
+            Some((key, val)) if val.starts_with("S-1-5-21-") && val.matches('-').count() >= 7 => {
+                let rid = val.rsplit('-').next().unwrap_or(val);
+                format!("{key}=S-1-5-21-…-{rid}")
+            }
+            _ => tok.to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 #[cfg(test)]
@@ -188,5 +227,16 @@ mod tests {
             .map(|f| f.strip_prefix(&root).unwrap())
             .collect();
         assert_eq!(names, ["a.evtx", "notes.txt", "sub/B.EVTX"].map(Path::new));
+    }
+
+    #[test]
+    fn shorten_sids_collapses_domain_sid_keeps_rest() {
+        // Long domain SID collapsed to its RID; target/by and spacing untouched.
+        assert_eq!(
+            shorten_sids("target=Administrators member=S-1-5-21-2603537626-3982775912-406486804-1000 by=fsir"),
+            "target=Administrators member=S-1-5-21-…-1000 by=fsir"
+        );
+        // No SID present -> unchanged, including multiple spaces.
+        assert_eq!(shorten_sids("script=a   b"), "script=a   b");
     }
 }
