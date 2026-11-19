@@ -3,12 +3,16 @@
 A small DFIR tool that parses Windows Event Log (`.evtx`) files and flags
 suspicious activity, written in Rust.
 
+Tested end to end on logs recorded during real attacks: mimikatz reading LSASS
+memory, PsExec-style services, cleared audit logs and Defender detections are
+all flagged (see [Example](#example)).
+
 It reads a log, normalizes each record, and runs two kinds of detection rules:
 
-- **Per-event rules** -> flag a single event known to matter (log cleared,
+- **Per-event rules** flag a single event known to matter (log cleared,
   account created, service installed, privilege-group change...), defined in
   a TOML file.
-- **Stateful rules** -> look at sequences, e.g. a burst of failed logons
+- **Stateful rules** look at sequences, e.g. a burst of failed logons
   followed by a success (a likely successful brute force).
 
 ## Build
@@ -89,10 +93,10 @@ Plus three behavioral rules on failed logons (4625), in code, all over a
 10-minute window:
 
 - *5 or more failures on an account, followed by a success (4624) on that same
-  account* → possible brute force (critical).
-- *10 or more failures on an account*, success or not → repeated failed logons
+  account*: possible brute force (critical).
+- *10 or more failures on an account*, success or not: repeated failed logons
   (warning).
-- *10 or more different accounts failing from one source address* → possible
+- *10 or more different accounts failing from one source address*: possible
   password spraying (warning).
 
 The last two alert once per burst, and again only after a quiet window.
@@ -137,8 +141,8 @@ check each one raises its alert. CI runs both on every push.
 - [x] Per-account and time-windowed brute-force detection
 - [x] Rules in a TOML file, with channel and field conditions
 - [x] Folder input, severity filter, JSON alerts
-- [ ] Sigma rule support
 - [x] Password-spraying detection (many accounts from one source)
+- [ ] Sigma rule support
 
 ---
 
